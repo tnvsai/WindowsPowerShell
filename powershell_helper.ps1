@@ -229,6 +229,14 @@ function xgit {
     Write-Host "[OK] Moved to Git repo root: $gitRoot" -ForegroundColor Cyan
 }
 
+function new($path) {
+    if (-not (Test-Path $path)) {
+        "" | Out-File -FilePath $path -Encoding utf8
+        Write-Host "Created new file: $path (UTF-8)"
+    } else {
+        Write-Host "File already exists: $path"
+    }
+}
 
 Register-ArgumentCompleter -CommandName fav,favgo,favrm,favopen -ScriptBlock {
     param($cmd, $param, $word)
@@ -246,4 +254,5 @@ Set-Alias xls   List-FavDirs
 Set-Alias xop Open-FavDir
 Set-Alias xcl Clean-FavDirs
 Set-Alias gitroot xgit
+Set-Alias xn	new
 
