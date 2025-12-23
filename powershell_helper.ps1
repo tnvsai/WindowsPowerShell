@@ -58,9 +58,7 @@ function Get-GitRoot {
 
     try {
         $root = git rev-parse --show-toplevel 2>$null
-        if ($root) {
-            return $root.Trim()
-        }
+        if ($root) { return $root.Trim() }
     } catch {}
 
     return $null
@@ -72,9 +70,7 @@ function Get-GitRoot {
 
 function Add-FavDir {
     param(
-        [Parameter(Mandatory)]
-        [string]$Alias,
-
+        [Parameter(Mandatory)][string]$Alias,
         [string]$Path = (Get-Location).Path
     )
 
@@ -94,12 +90,12 @@ function Add-FavDir {
         $Type = "dir"
     }
 
-    if ($Dirs.ContainsKey($Alias)) {
-        $count = $Dirs[$Alias].count
+    $count = if ($Dirs.ContainsKey($Alias)) {
         Write-Host "[WARN] Updated existing alias: $Alias (count preserved)" -ForegroundColor Yellow
+        $Dirs[$Alias].count
     } else {
-        $count = 0
         Write-Host "[OK] Added new favorite: $Alias" -ForegroundColor Green
+        0
     }
 
     $Dirs[$Alias] = @{
@@ -137,23 +133,21 @@ function Go-FavDir {
         return
     }
 
-    $Target = $Dirs[$Alias].path
-
-    if (-not (Test-Path $Target)) {
-        Write-Host "[ERROR] Directory missing: $Target" -ForegroundColor Red
+    $target = $Dirs[$Alias].path
+    if (-not (Test-Path $target)) {
+        Write-Host "[ERROR] Directory missing: $target" -ForegroundColor Red
         return
     }
 
     $Dirs[$Alias].count++
     Save-FavDirs $Dirs
 
-    Set-Location $Target
-    Write-Host "[OK] Moved to $Target" -ForegroundColor Cyan
+    Set-Location $target
+    Write-Host "[OK] Moved to $target" -ForegroundColor Cyan
 }
 
 function List-FavDirs {
     $Dirs = Get-FavDirs
-
     Write-Host "=== Favorite Directories ===" -ForegroundColor Cyan
 
     if ($Dirs.Count -eq 0) {
@@ -169,6 +163,10 @@ function List-FavDirs {
         }
 }
 
+# ------------------------------
+# Interactive jump (x)
+# ------------------------------
+
 function x {
     param([string]$Filter)
 
@@ -179,6 +177,24 @@ function x {
     }
 
     $items = $Dirs.GetEnumerator()
+
+    # Numeric shortcut: x 1
+    if ($Filter -match '^\d+$') {
+        $list = @(
+            $items |
+            Sort-Object { $_.Value.count } -Descending |
+            Select-Object -ExpandProperty Key
+        )
+
+        $index = [int]$Filter - 1
+        if ($index -lt 0 -or $index -ge $list.Count) {
+            Write-Host "[ERROR] Invalid index: $Filter" -ForegroundColor Red
+            return
+        }
+
+        Go-FavDir $list[$index]
+        return
+    }
 
     if ($Filter) {
         $Filter = $Filter.ToLower()
@@ -211,29 +227,54 @@ function x {
     }
 }
 
-function xgit {
-    $root = Get-GitRoot
-    if (-not $root) {
-        Write-Host "[ERROR] Not inside a Git repository" -ForegroundColor Red
-        return
-    }
-
-    Set-Location $root
-    Write-Host "[OK] Moved to Git repo root: $root" -ForegroundColor Cyan
-}
+# ------------------------------
+# Open helpers
+# ------------------------------
 
 function Open-FavDir {
     param([Parameter(Mandatory)][string]$Alias)
 
-    $Alias = $Alias.ToLower().Trim()
     $Dirs = Get-FavDirs
-
-    if ($Dirs.ContainsKey($Alias)) {
-        Start-Process explorer.exe $Dirs[$Alias].path
-    } else {
-        Write-Host "[ERROR] Alias not found: $Alias" -ForegroundColor Red
-    }
+    Start-Process explorer.exe $Dirs[$Alias].path
 }
+
+function xop {
+    param([Parameter(Mandatory)][string]$Target)
+
+    $Dirs = Get-FavDirs
+    if ($Dirs.Count -eq 0) {
+        Write-Host "No favorites saved." -ForegroundColor Yellow
+        return
+    }
+
+    $list = @(
+        $Dirs.GetEnumerator() |
+        Sort-Object { $_.Value.count } -Descending |
+        Select-Object -ExpandProperty Key
+    )
+
+    if ($Target -match '^\d+$') {
+        $index = [int]$Target - 1
+        if ($index -lt 0 -or $index -ge $list.Count) {
+            Write-Host "[ERROR] Invalid index: $Target" -ForegroundColor Red
+            return
+        }
+        $alias = $list[$index]
+    } else {
+        $alias = $Target.ToLower().Trim()
+        if (-not $Dirs.ContainsKey($alias)) {
+            Write-Host "[ERROR] Alias not found: $alias" -ForegroundColor Red
+            return
+        }
+    }
+
+    Open-FavDir $alias
+    Write-Host "[OK] Opened: $alias" -ForegroundColor Cyan
+}
+
+# ------------------------------
+# Utilities
+# ------------------------------
 
 function Clean-FavDirs {
     $Dirs = Get-FavDirs
@@ -243,6 +284,16 @@ function Clean-FavDirs {
         }
     }
     Save-FavDirs $Dirs
+}
+
+function xgit {
+    $root = Get-GitRoot
+    if (-not $root) {
+        Write-Host "[ERROR] Not inside a Git repository" -ForegroundColor Red
+        return
+    }
+    Set-Location $root
+    Write-Host "[OK] Moved to Git repo root: $root" -ForegroundColor Cyan
 }
 
 function xnew($path) {
@@ -275,7 +326,6 @@ Set-Alias xadd  Add-FavDir
 Set-Alias xrm   Remove-FavDir
 Set-Alias xgo   Go-FavDir
 Set-Alias xls   List-FavDirs
-Set-Alias xop   Open-FavDir
 Set-Alias xcl   Clean-FavDirs
 Set-Alias gitroot xgit
 Set-Alias xn    xnew
