@@ -1,12 +1,16 @@
 # ==============================
-# Favorite Directories Manager 
+# Favorite Directories Manager
 # ==============================
 
-$favFile = "$HOME\Documents\WindowsPowerShell\.favdirs.json"
+$favFile = Join-Path $HOME "Documents\WindowsPowerShell\.favdirs.json"
 
 if (-not (Test-Path $favFile)) {
     "{}" | Set-Content $favFile -Encoding UTF8
 }
+
+# ------------------------------
+# Storage helpers
+# ------------------------------
 
 function Get-FavDirs {
     try {
@@ -18,17 +22,18 @@ function Get-FavDirs {
     $dirs = @{}
     if ($json) {
         foreach ($p in $json.PSObject.Properties) {
-
-            # Auto-migrate old format
             if ($p.Value -is [string]) {
+                # migrate old format
                 $dirs[$p.Name] = @{
                     path  = $p.Value
                     count = 0
+                    type  = "dir"
                 }
             } else {
                 $dirs[$p.Name] = @{
                     path  = $p.Value.path
                     count = [int]$p.Value.count
+                    type  = $p.Value.type
                 }
             }
         }
@@ -37,23 +42,33 @@ function Get-FavDirs {
 }
 
 function Save-FavDirs($dirs) {
-    $dirs | ConvertTo-Json -Depth 5 | Set-Content $favFile -Encoding UTF8
+    $tmp = "$favFile.tmp"
+    $dirs | ConvertTo-Json -Depth 5 | Set-Content $tmp -Encoding UTF8
+    Move-Item $tmp $favFile -Force
 }
 
+# ------------------------------
+# Git helpers
+# ------------------------------
+
 function Get-GitRoot {
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        return $null
+    }
+
     try {
-        $gitRoot = git rev-parse --show-toplevel 2>$null
-        if ($gitRoot) {
-            return $gitRoot.Trim()
+        $root = git rev-parse --show-toplevel 2>$null
+        if ($root) {
+            return $root.Trim()
         }
     } catch {}
+
     return $null
 }
 
-function In-GitRepo {
-    return [bool](Get-GitRoot)
-}
-
+# ------------------------------
+# Core commands
+# ------------------------------
 
 function Add-FavDir {
     param(
@@ -63,7 +78,7 @@ function Add-FavDir {
         [string]$Path = (Get-Location).Path
     )
 
-    $Alias = $Alias.ToLower()
+    $Alias = $Alias.ToLower().Trim()
     $Dirs  = Get-FavDirs
 
     $gitRoot = Get-GitRoot
@@ -80,27 +95,26 @@ function Add-FavDir {
     }
 
     if ($Dirs.ContainsKey($Alias)) {
-        $existingCount = $Dirs[$Alias].count
+        $count = $Dirs[$Alias].count
         Write-Host "[WARN] Updated existing alias: $Alias (count preserved)" -ForegroundColor Yellow
     } else {
-        $existingCount = 0
+        $count = 0
         Write-Host "[OK] Added new favorite: $Alias" -ForegroundColor Green
     }
 
     $Dirs[$Alias] = @{
         path  = $Resolved
-        count = $existingCount
+        count = $count
         type  = $Type
     }
 
     Save-FavDirs $Dirs
 }
 
-
 function Remove-FavDir {
     param([Parameter(Mandatory)][string]$Alias)
 
-    $Alias = $Alias.ToLower()
+    $Alias = $Alias.ToLower().Trim()
     $Dirs = Get-FavDirs
 
     if ($Dirs.ContainsKey($Alias)) {
@@ -115,7 +129,7 @@ function Remove-FavDir {
 function Go-FavDir {
     param([Parameter(Mandatory)][string]$Alias)
 
-    $Alias = $Alias.ToLower()
+    $Alias = $Alias.ToLower().Trim()
     $Dirs = Get-FavDirs
 
     if (-not $Dirs.ContainsKey($Alias)) {
@@ -150,9 +164,8 @@ function List-FavDirs {
     $Dirs.GetEnumerator() |
         Sort-Object { $_.Value.count } -Descending |
         ForEach-Object {
-            $typeTag = if ($_.Value.type -eq "git") { "[git]" } else { "[dir]" }
-			Write-Host "$($_.Key) $typeTag -> $($_.Value.path) (used $($_.Value.count))"
-
+            $tag = if ($_.Value.type -eq "git") { "[git]" } else { "[dir]" }
+            Write-Host "$($_.Key) $tag -> $($_.Value.path) (used $($_.Value.count))"
         }
 }
 
@@ -172,9 +185,11 @@ function x {
         $items = $items | Where-Object { $_.Key -like "*$Filter*" }
     }
 
-    $list = $items |
+    $list = @(
+        $items |
         Sort-Object { $_.Value.count } -Descending |
         Select-Object -ExpandProperty Key
+    )
 
     if ($list.Count -eq 0) {
         Write-Host "No matches." -ForegroundColor Yellow
@@ -183,7 +198,8 @@ function x {
 
     for ($i = 0; $i -lt $list.Count; $i++) {
         $k = $list[$i]
-        Write-Host "$($i+1)) $k -> $($Dirs[$k].path) (used $($Dirs[$k].count))"
+        $tag = if ($Dirs[$k].type -eq "git") { "[git]" } else { "[dir]" }
+        Write-Host "$($i+1)) $k $tag -> $($Dirs[$k].path) (used $($Dirs[$k].count))"
     }
 
     $choice = Read-Host "Select number"
@@ -195,10 +211,21 @@ function x {
     }
 }
 
+function xgit {
+    $root = Get-GitRoot
+    if (-not $root) {
+        Write-Host "[ERROR] Not inside a Git repository" -ForegroundColor Red
+        return
+    }
+
+    Set-Location $root
+    Write-Host "[OK] Moved to Git repo root: $root" -ForegroundColor Cyan
+}
+
 function Open-FavDir {
     param([Parameter(Mandatory)][string]$Alias)
 
-    $Alias = $Alias.ToLower()
+    $Alias = $Alias.ToLower().Trim()
     $Dirs = Get-FavDirs
 
     if ($Dirs.ContainsKey($Alias)) {
@@ -218,27 +245,20 @@ function Clean-FavDirs {
     Save-FavDirs $Dirs
 }
 
-function xgit {
-    $gitRoot = Get-GitRoot
-    if (-not $gitRoot) {
-        Write-Host "[ERROR] Not inside a Git repository" -ForegroundColor Red
-        return
-    }
-
-    Set-Location $gitRoot
-    Write-Host "[OK] Moved to Git repo root: $gitRoot" -ForegroundColor Cyan
-}
-
-function new($path) {
+function xnew($path) {
     if (-not (Test-Path $path)) {
-        "" | Out-File -FilePath $path -Encoding utf8
+        "" | Out-File -FilePath $path -Encoding UTF8
         Write-Host "Created new file: $path (UTF-8)"
     } else {
         Write-Host "File already exists: $path"
     }
 }
 
-Register-ArgumentCompleter -CommandName fav,favgo,favrm,favopen -ScriptBlock {
+# ------------------------------
+# Tab completion
+# ------------------------------
+
+Register-ArgumentCompleter -CommandName x,xgo,xrm,xop -ScriptBlock {
     param($cmd, $param, $word)
     foreach ($k in (Get-FavDirs).Keys) {
         if ($k -like "$word*") {
@@ -247,12 +267,15 @@ Register-ArgumentCompleter -CommandName fav,favgo,favrm,favopen -ScriptBlock {
     }
 }
 
+# ------------------------------
+# Aliases
+# ------------------------------
+
 Set-Alias xadd  Add-FavDir
 Set-Alias xrm   Remove-FavDir
 Set-Alias xgo   Go-FavDir
 Set-Alias xls   List-FavDirs
-Set-Alias xop Open-FavDir
-Set-Alias xcl Clean-FavDirs
+Set-Alias xop   Open-FavDir
+Set-Alias xcl   Clean-FavDirs
 Set-Alias gitroot xgit
-Set-Alias xn	new
-
+Set-Alias xn    xnew
