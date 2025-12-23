@@ -23,17 +23,14 @@ function Get-FavDirs {
     if ($json) {
         foreach ($p in $json.PSObject.Properties) {
             if ($p.Value -is [string]) {
-                # migrate old format
                 $dirs[$p.Name] = @{
                     path  = $p.Value
                     count = 0
-                    type  = "dir"
                 }
             } else {
                 $dirs[$p.Name] = @{
                     path  = $p.Value.path
                     count = [int]$p.Value.count
-                    type  = $p.Value.type
                 }
             }
         }
@@ -77,18 +74,12 @@ function Add-FavDir {
     $Alias = $Alias.ToLower().Trim()
     $Dirs  = Get-FavDirs
 
-    $gitRoot = Get-GitRoot
-    if ($gitRoot) {
-        $Resolved = $gitRoot
-        $Type = "git"
-    } else {
-        if (-not (Test-Path $Path)) {
-            Write-Host "[ERROR] Path does not exist: $Path" -ForegroundColor Red
-            return
-        }
-        $Resolved = (Resolve-Path $Path).Path
-        $Type = "dir"
+    if (-not (Test-Path $Path)) {
+        Write-Host "[ERROR] Path does not exist: $Path" -ForegroundColor Red
+        return
     }
+
+    $Resolved = (Resolve-Path $Path).Path
 
     $count = if ($Dirs.ContainsKey($Alias)) {
         Write-Host "[WARN] Updated existing alias: $Alias (count preserved)" -ForegroundColor Yellow
@@ -101,7 +92,6 @@ function Add-FavDir {
     $Dirs[$Alias] = @{
         path  = $Resolved
         count = $count
-        type  = $Type
     }
 
     Save-FavDirs $Dirs
@@ -134,16 +124,23 @@ function Go-FavDir {
     }
 
     $target = $Dirs[$Alias].path
+
     if (-not (Test-Path $target)) {
-        Write-Host "[ERROR] Directory missing: $target" -ForegroundColor Red
+        Write-Host "[ERROR] Path missing: $target" -ForegroundColor Red
         return
     }
 
     $Dirs[$Alias].count++
     Save-FavDirs $Dirs
 
-    Set-Location $target
-    Write-Host "[OK] Moved to $target" -ForegroundColor Cyan
+    if (Test-Path $target -PathType Container) {
+        Set-Location $target
+        Write-Host "[OK] Moved to $target" -ForegroundColor Cyan
+    } else {
+        $parent = Split-Path $target -Parent
+        Set-Location $parent
+        Write-Host "[OK] Moved to $parent (file: $(Split-Path $target -Leaf))" -ForegroundColor Cyan
+    }
 }
 
 function List-FavDirs {
@@ -158,8 +155,9 @@ function List-FavDirs {
     $Dirs.GetEnumerator() |
         Sort-Object { $_.Value.count } -Descending |
         ForEach-Object {
-            $tag = if ($_.Value.type -eq "git") { "[git]" } else { "[dir]" }
-            Write-Host "$($_.Key) $tag -> $($_.Value.path) (used $($_.Value.count))"
+            $path = $_.Value.path
+            $tag = if (Test-Path $path -PathType Leaf) { "[file]" } else { "[dir]" }
+            Write-Host "$($_.Key) $tag -> $path (used $($_.Value.count))"
         }
 }
 
@@ -178,7 +176,6 @@ function x {
 
     $items = $Dirs.GetEnumerator()
 
-    # Numeric shortcut: x 1
     if ($Filter -match '^\d+$') {
         $list = @(
             $items |
@@ -214,8 +211,9 @@ function x {
 
     for ($i = 0; $i -lt $list.Count; $i++) {
         $k = $list[$i]
-        $tag = if ($Dirs[$k].type -eq "git") { "[git]" } else { "[dir]" }
-        Write-Host "$($i+1)) $k $tag -> $($Dirs[$k].path) (used $($Dirs[$k].count))"
+        $path = $Dirs[$k].path
+        $tag = if (Test-Path $path -PathType Leaf) { "[file]" } else { "[dir]" }
+        Write-Host "$($i+1)) $k $tag -> $path (used $($Dirs[$k].count))"
     }
 
     $choice = Read-Host "Select number"
@@ -235,17 +233,27 @@ function Open-FavDir {
     param([Parameter(Mandatory)][string]$Alias)
 
     $Dirs = Get-FavDirs
-    Start-Process explorer.exe $Dirs[$Alias].path
+    $path = $Dirs[$Alias].path
+
+    if (-not (Test-Path $path)) {
+        Write-Host "[ERROR] Path does not exist: $path" -ForegroundColor Red
+        return
+    }
+
+    if (Test-Path $path -PathType Container) {
+        # Directory → open in Explorer
+        Start-Process explorer.exe $path
+    }
+    else {
+        # File → open with default application
+        Start-Process $path
+    }
 }
 
 function xop {
     param([Parameter(Mandatory)][string]$Target)
 
     $Dirs = Get-FavDirs
-    if ($Dirs.Count -eq 0) {
-        Write-Host "No favorites saved." -ForegroundColor Yellow
-        return
-    }
 
     $list = @(
         $Dirs.GetEnumerator() |
